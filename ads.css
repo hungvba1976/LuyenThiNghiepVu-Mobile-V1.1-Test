@@ -1,0 +1,98 @@
+:root{
+  --ad-slot-content-height:50px;
+  --ad-slot-total-height:calc(var(--ad-slot-content-height) + env(safe-area-inset-bottom, 0px));
+}
+
+.ad-bottom-slot{
+  position:fixed;
+  left:0;
+  right:0;
+  bottom:0;
+  z-index:75;
+  height:var(--ad-slot-total-height);
+  padding-right:env(safe-area-inset-right, 0px);
+  padding-bottom:env(safe-area-inset-bottom, 0px);
+  padding-left:env(safe-area-inset-left, 0px);
+  background:#f8fafc;
+  border-top:1px solid #cbd5e1;
+  box-shadow:0 -2px 8px rgba(15,23,42,.08);
+}
+
+.ad-bottom-slot[hidden]{display:none!important}
+.ad-bottom-slot.ad-slot-empty{
+  height:0;
+  padding:0;
+  border:0;
+  box-shadow:none;
+  background:transparent;
+  overflow:visible;
+}
+
+.ad-bottom-content{
+  width:100%;
+  height:var(--ad-slot-content-height);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  overflow:hidden;
+  color:#64748b;
+  background:repeating-linear-gradient(-45deg,#f8fafc,#f8fafc 8px,#f1f5f9 8px,#f1f5f9 16px);
+  font-size:12px;
+  font-weight:800;
+  letter-spacing:.04em;
+  line-height:1;
+  pointer-events:none;
+  user-select:none;
+}
+
+/* Màn hình thường luôn kết thúc phía trên vùng quảng cáo. */
+body.ads-enabled{
+  padding-bottom:var(--ad-slot-total-height);
+}
+
+/* Các cụm nút cố định nằm phía trên quảng cáo, không bị quảng cáo che. */
+body.ads-enabled .session-actionbar,
+body.ads-enabled .setup-action-dock{
+  bottom:var(--ad-slot-total-height);
+  padding-bottom:8px;
+}
+
+/* Giữ đủ vùng cuộn cho câu hỏi, navigator và phản hồi Practice. */
+body.ads-enabled.session-mode{
+  padding-bottom:calc(var(--session-actionbar-height) + var(--ad-slot-total-height) + 14px);
+}
+body.ads-enabled .session-bottom-spacer{
+  height:calc(var(--session-actionbar-height) + var(--ad-slot-total-height) + 18px);
+}
+
+/* Chiều cao dock được ads.js đo độc lập sau mỗi lần app dựng màn hình. */
+body.ads-enabled .setup-action-spacer{
+  height:calc(var(--setup-dock-height, 190px) + var(--ad-slot-total-height) + 12px)!important;
+}
+
+/* Trên điện thoại, header chỉ giữ chỗ khi đang ở đầu trang. Khi người dùng
+   cuộn xuống đủ xa, header thu gọn; kéo về đầu trang thì hiện lại. */
+@media (max-width:699px){
+  body.session-mode .topbar{
+    max-height:96px;
+    overflow:hidden;
+    transition:max-height .18s ease,padding .18s ease,opacity .15s ease,transform .18s ease,border-width .18s ease;
+  }
+  body.session-mode.session-header-collapsed .topbar{
+    max-height:env(safe-area-inset-top, 0px);
+    padding-top:env(safe-area-inset-top, 0px);
+    padding-bottom:0;
+    border-bottom-width:0;
+    opacity:0;
+    transform:translateY(-8px);
+    pointer-events:none;
+  }
+}
+
+@media (forced-colors:active){
+  .ad-bottom-slot{border-top:1px solid CanvasText}
+}
+
+@media (prefers-reduced-motion:reduce){
+  body.session-mode .topbar{transition:none}
+}
