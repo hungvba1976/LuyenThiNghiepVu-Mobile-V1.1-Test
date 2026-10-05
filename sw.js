@@ -1,9 +1,8 @@
-const APP_CACHE = "luyenthi-v131-app-ads-prototype-02";
+const APP_CACHE = "luyenthi-v131-app-bank-update-reminder";
 const BANK_CACHE = "luyenthi-v130-bank-releases";
 const CAMPAIGN_CACHE = "luyenthi-v130-campaign-modules";
 const APP_ASSETS = [
-  "./index.html","./styles.css?v=v1.3.1-ads-prototype-02","./ads.css?v=v1.3.1-ads-prototype-02",
-  "./ads-config.js?v=v1.3.1-ads-prototype-02","./ads.js?v=v1.3.1-ads-prototype-02","./app.js?v=v1.3.1-ads-prototype-02",
+  "./index.html","./styles.css?v=v1.3.1-bank-update-reminder-test","./app.js?v=v1.3.1-bank-update-reminder-test",
   "./manifest.webmanifest","./version.json",
   "./icon-192.png","./icon-512.png","./apple-touch-icon-180.png","./donate-qr.png"
 ];

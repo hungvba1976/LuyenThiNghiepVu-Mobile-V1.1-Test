@@ -1,7 +1,7 @@
 "use strict";
 
-const APP_VERSION = "Mobile V1.3.1 ADS PROTOTYPE 02";
-const APP_BUILD_ID = "v1.3.1-ads-prototype-02";
+const APP_VERSION = "Mobile V1.3.1 VIEW RESTORE + BANK UPDATE REMINDER TEST";
+const APP_BUILD_ID = "v1.3.1-bank-update-reminder-test";
 const BASELINE_RELEASE = {
   "schemaVersion": 2,
   "bankVersion": "1.0.0",
@@ -26,6 +26,28 @@ const EXAM_HISTORY_LIMIT = 30;
 const CAMPAIGN_REGISTRY_KEY = `${STORAGE_PREFIX}campaignRegistry`;
 const CAMPAIGN_CATALOG_URL = "./campaigns/catalog.json";
 const CAMPAIGN_CACHE_NAME = "luyenthi-v130-campaign-modules";
+const VIEW_STATE_KEY = `${STORAGE_PREFIX}viewState`;
+
+function rememberView(name, params={}){
+  try{
+    sessionStorage.setItem(VIEW_STATE_KEY,JSON.stringify({name,params,scrollY:0,savedAt:Date.now(),buildId:APP_BUILD_ID}));
+  }catch(e){ console.warn("Không lưu được trạng thái màn hình:",e); }
+}
+function updateRememberedScroll(){
+  try{
+    const raw=sessionStorage.getItem(VIEW_STATE_KEY);if(!raw)return;
+    const state=JSON.parse(raw);if(!state||typeof state!=="object")return;
+    state.scrollY=Math.max(0,Math.round(window.scrollY||0));state.savedAt=Date.now();
+    sessionStorage.setItem(VIEW_STATE_KEY,JSON.stringify(state));
+  }catch(e){}
+}
+function rememberedView(){
+  try{const s=JSON.parse(sessionStorage.getItem(VIEW_STATE_KEY)||"null");return s&&typeof s==="object"?s:null;}catch{return null;}
+}
+function restoreRememberedScroll(state){
+  const y=Math.max(0,Number(state?.scrollY)||0);
+  requestAnimationFrame(()=>requestAnimationFrame(()=>window.scrollTo(0,y)));
+}
 
 
 const GROUP_B = ["khdn","khcn","tham_dinh","ktgd_noi_bo","ktgd_khach_hang","ttqt_tttm","xu_ly_no"];
@@ -324,6 +346,7 @@ function examComparisonHtml(previous,current){
   return `<section class="panel"><div class="row between"><div><div class="section-title">So với lần Thi thử gần nhất</div><div class="small mt8">Lần trước: ${previous.score}/${previous.total} · ${formatPercent(Number(previous.percent))}${when?` · ${when}`:""}</div><div class="small mt8">Lần này: ${current.score}/${current.total} · ${formatPercent(Number(current.percent))}</div></div><span class="badge ${tone}">${trend}</span></div></section>`;
 }
 function renderExamHistory(){
+  rememberView("examHistory");
   unbindSessionActionBar();document.body.classList.remove("session-mode");
   const h=loadExamHistory();
   const rows=h.length?h.map(r=>{const when=new Intl.DateTimeFormat("vi-VN",{day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit"}).format(new Date(r.completedAt));return `<div class="list-line"><span><b>${esc(r.campaignName||r.bankName)}</b><br><span class="small">${esc(r.campaignId?"Cuộc thi phong trào":r.candidateGroup)} · ${when}<br>Đúng ${r.score} · Sai ${r.wrong} · Bỏ trống ${r.blank} · ${formatDuration(r.elapsedSeconds)}</span></span><b>${r.score}/${r.total}</b></div>`;}).join(""):`<div class="notice info">Chưa có kết quả Thi thử nào được lưu.</div>`;
@@ -387,6 +410,33 @@ async function setActiveRelease(meta){
 }
 function activeReleaseFromStorage(){
   try{return JSON.parse(localStorage.getItem(ACTIVE_RELEASE_KEY)||"null")||BASELINE_RELEASE;}catch{return BASELINE_RELEASE;}
+}
+function sameBankRelease(a,b){
+  if(!a||!b)return false;
+  if(String(a.bankVersion||"")!==String(b.bankVersion||""))return false;
+  // Nếu nhà phát hành thay nội dung nhưng lỡ giữ nguyên số phiên bản, checksum khác
+  // vẫn được coi là Bank đã thay đổi để không bỏ sót cảnh báo cho người dùng.
+  if(a.checksumSha256&&b.checksumSha256&&String(a.checksumSha256)!==String(b.checksumSha256))return false;
+  return true;
+}
+let bankReminderChecking=false;
+async function checkBankUpdateReminder(){
+  if(bankReminderChecking||currentSession||$("#modalWrap"))return;
+  bankReminderChecking=true;
+  try{
+    const latest=await fetchJson(`${LATEST_URL}?t=${Date.now()}`,{cache:"no-store"});
+    if(sameBankRelease(latest,ACTIVE_RELEASE))return;
+    pendingUpdate=latest;
+    showModal(`<div class="eyebrow">NGÂN HÀNG CÂU HỎI</div><h3 class="mt8">Đã có bộ câu hỏi mới, bạn có muốn cập nhật không?</h3>
+      <div class="small mt8">Bank đang dùng: ${esc(ACTIVE_RELEASE.bankVersion)} · Bank mới: ${esc(latest.bankVersion)}</div>
+      <div class="notice info mt12">${Number(latest.newCount||0)} câu mới · ${Number(latest.updatedCount||0)} câu cập nhật · ${Number(latest.questionCount||0)} câu tổng.</div>
+      <div class="modal-actions"><button class="btn3d primary" id="reminderUpdateNow">⬇️ Cập nhật ngay</button><button class="btn3d" id="reminderLater">Để sau</button></div>`);
+    $("#reminderUpdateNow").onclick=()=>{closeModal();renderUpdate().then(()=>checkForUpdate());};
+    $("#reminderLater").onclick=closeModal;
+  }catch(e){
+    // Nhắc cập nhật là best-effort: mất mạng/không tải được latest không được cản sử dụng offline.
+    console.warn("Không kiểm tra được Bank mới để nhắc người dùng:",e);
+  }finally{bankReminderChecking=false;}
 }
 function bank(bankId){ return CURRENT_DATA.banks[bankId]; }
 function manifest(){ return CURRENT_DATA.manifest; }
@@ -516,13 +566,20 @@ function scheduleCampaignMaintenance(){
     const previousIds=new Set(activeCampaigns().map(x=>x.moduleId));
     await loadCampaignCatalog();
     const expiredCurrent=!!currentSession?.campaignId&&!campaignSessionIsActive(currentSession);
+    const activeCampaignExpired=!!ACTIVE_CAMPAIGN?.moduleId && !CAMPAIGN_CATALOG.some(x=>x.moduleId===ACTIVE_CAMPAIGN.moduleId && campaignStatus(x)==="ACTIVE");
     await cleanupExpiredCampaigns();
 
     if(expiredCurrent){
       stopTimer();currentSession=null;ACTIVE_CAMPAIGN=null;CURRENT_DATA=ACTIVE_DATA;
       alert("Cuộc thi phong trào đã kết thúc. Module và dữ liệu của cuộc thi đã được gỡ.");
       renderHome();
-    }else if(!currentSession){
+    }else if(activeCampaignExpired){
+      ACTIVE_CAMPAIGN=null;CURRENT_DATA=ACTIVE_DATA;
+      alert("Cuộc thi phong trào đã kết thúc. Module đã được gỡ khỏi danh sách đang hoạt động.");
+      renderHome();
+    }else if(!currentSession && atHomeView()){
+      // Chỉ refresh Home khi người dùng đang thực sự ở Home. Trước đây mọi
+      // màn hình setup/update đều bị đá về Home sau mỗi nhịp bảo trì Campaign.
       renderHome();
     }
     scheduleCampaignMaintenance();
@@ -753,6 +810,7 @@ async function openCampaign(id){
   }catch(e){alert(`Không mở được Campaign: ${e.message}`);}
 }
 function renderCampaignHome(campaign){
+  rememberView("campaignHome",{moduleId:campaign.moduleId});
   unbindSessionActionBar();document.body.classList.remove("session-mode");
   const last=loadCampaignLastResult(campaign.moduleId);
   const lastHtml=last?`<section class="panel"><div class="section-title">Kết quả gần nhất của cuộc thi</div><div class="small">${last.kind==="practice"?`Luyện tập · Đúng ${last.correct}/${last.graded}`:`Thi thử · ${last.score}/${last.total}`}</div></section>`:"";
@@ -768,6 +826,7 @@ function renderCampaignHome(campaign){
   if(campaign.mockExamEnabled)$("#campaignExam").onclick=()=>startCampaignExam(campaign);
 }
 function renderCampaignPracticeMode(campaign){
+  rememberView("campaignPracticeMode",{moduleId:campaign.moduleId});
   app().innerHTML=`<section class="panel"><div class="row"><button class="btn3d" id="backCampaign">‹</button><div><div class="eyebrow">LUYỆN TẬP CUỘC THI</div><div class="title mt8">${esc(campaign.name)}</div></div></div></section>
   <section class="panel"><div class="section-title">Cách luyện</div><div class="grid2">
     <button class="btn3d choice-card selected" data-campaign-mode="Theo thứ tự">Theo thứ tự</button>
@@ -799,6 +858,7 @@ function inAppBrowserNotice(){
 }
 
 function renderHome(){
+  rememberView("home");
   unbindSessionActionBar();
   document.body.classList.remove("session-mode");
   renderHeader();const newTotal=Object.values(ACTIVE_DATA.banks).reduce((n,b)=>n+(b.meta.newCount||0),0);
@@ -825,6 +885,7 @@ function renderHome(){
 }
 
 function renderAbout(){
+  rememberView("about");
   unbindSessionActionBar();
   document.body.classList.remove("session-mode");
   renderHeader();
@@ -872,6 +933,7 @@ function groupButtons(selected){
   </div>`;
 }
 function renderPracticeSetup(newOnly=false,selectedGroup="specialist"){
+  rememberView("practiceSetup",{newOnly:!!newOnly,selectedGroup});
   unbindSessionActionBar();
   document.body.classList.remove("session-mode");
   CURRENT_DATA=ACTIVE_DATA;
@@ -886,6 +948,7 @@ function renderPracticeSetup(newOnly=false,selectedGroup="specialist"){
   document.querySelectorAll("[data-bank]").forEach(b=>b.onclick=()=>renderPracticeMode(b.dataset.bank,newOnly));
 }
 function renderPracticeMode(bankId,newOnly){
+  rememberView("practiceMode",{bankId,newOnly:!!newOnly});
   const count=newOnly?bankNewCount(bankId):bank(bankId).questions.length;
   app().innerHTML=`<section class="panel"><div class="row"><button class="btn3d" id="backSetup">‹</button><div><div class="eyebrow">${newOnly?"Luyện câu mới":"Luyện tập"}</div><div class="title mt8">${esc(bank(bankId).meta.name)}</div></div></div></section>
   <section class="panel"><div class="section-title">Cách luyện</div><div class="grid2"><button class="btn3d choice-card selected" data-mode="Theo thứ tự">Theo thứ tự</button><button class="btn3d choice-card" data-mode="Ngẫu nhiên">Ngẫu nhiên</button></div>
@@ -911,6 +974,7 @@ function examStructureHtml(bp){
 }
 
 function renderExamSetup(selectedGroup="specialist",groupCode="A",bankId=null){
+  rememberView("examSetup",{selectedGroup,groupCode,bankId});
   unbindSessionActionBar();
   document.body.classList.remove("session-mode");
   CURRENT_DATA=ACTIVE_DATA;
@@ -1045,7 +1109,6 @@ function adjacentPracticeReviewIndex(session,direction){
 
 let actionBarResizeObserver = null;
 let actionBarScrollTimer = null;
-let sessionHeaderExpandedHeight = 0;
 
 
 function scrollFeedbackAboveActionBar(){
@@ -1053,13 +1116,11 @@ function scrollFeedbackAboveActionBar(){
   if(!feedback) return;
   const bar=document.querySelector(".session-actionbar");
   const topbar=document.querySelector(".topbar");
+  const barHeight=bar?.getBoundingClientRect().height || 0;
+  const topbarHeight=topbar?.getBoundingClientRect().height || 0;
   const viewportHeight=window.visualViewport?.height || window.innerHeight || document.documentElement.clientHeight;
-  const topbarRect=topbar?.getBoundingClientRect();
-  const barRect=bar?.getBoundingClientRect();
-  const topLimit=Math.max(0,topbarRect?.bottom || 0)+10;
-  // Dùng mép trên thực tế của cụm nút. Cách này tự tính cả khoảng dịch do
-  // Bottom Ad Bar, bất kể quảng cáo cao 50 px, thấp hơn hay đã thu gọn.
-  const bottomLimit=Math.min(viewportHeight,barRect?.top ?? viewportHeight)-14;
+  const topLimit=topbarHeight+10;
+  const bottomLimit=viewportHeight-barHeight-12;
   const rect=feedback.getBoundingClientRect();
   const available=Math.max(80,bottomLimit-topLimit);
 
@@ -1126,20 +1187,7 @@ function bindSessionActionBar(){
     actionBarResizeObserver.observe(bar);
   }
 
-  const syncSessionHeader=()=>{
-    if(window.innerWidth>=700){document.body.classList.remove("session-header-collapsed");return;}
-    const topbar=document.querySelector(".topbar");
-    if(!topbar)return;
-    if(!document.body.classList.contains("session-header-collapsed")){
-      sessionHeaderExpandedHeight=Math.max(sessionHeaderExpandedHeight,Math.ceil(topbar.getBoundingClientRect().height));
-    }
-    const y=Math.max(0,window.scrollY||0);
-    if(y<=2) document.body.classList.remove("session-header-collapsed");
-    else if(y>=Math.max(72,sessionHeaderExpandedHeight+8)) document.body.classList.add("session-header-collapsed");
-  };
-
   const onScroll=()=>{
-    syncSessionHeader();
     bar.classList.add("is-scrolling");
     if(actionBarScrollTimer) clearTimeout(actionBarScrollTimer);
     actionBarScrollTimer=setTimeout(()=>bar.classList.remove("is-scrolling"),360);
@@ -1147,7 +1195,6 @@ function bindSessionActionBar(){
   window.removeEventListener("scroll",window.__luyenthiScrollHandler||(()=>{}));
   window.__luyenthiScrollHandler=onScroll;
   window.addEventListener("scroll",onScroll,{passive:true});
-  syncSessionHeader();
 }
 
 function unbindSessionActionBar(){
@@ -1163,8 +1210,6 @@ function unbindSessionActionBar(){
     window.removeEventListener("scroll",window.__luyenthiScrollHandler);
     window.__luyenthiScrollHandler=null;
   }
-  document.body.classList.remove("session-header-collapsed");
-  sessionHeaderExpandedHeight=0;
   document.documentElement.style.removeProperty("--session-actionbar-height");
 }
 function goParentFromSession(){
@@ -1418,19 +1463,46 @@ function renderExamReview(index,wrongOnly=false){
   $("#nextWrong").onclick=()=>{let found=null;for(let step=1;step<=s.questionIds.length;step++){const i=(index+step)%s.questionIds.length;if(examStatus(s,s.questionIds[i])==="wrong"){found=i;break;}}if(found!==null)renderExamReview(found,true);};
 }
 
+function bankUpdateSummaryHtml(){
+  const explicit=Array.isArray(ACTIVE_DATA?.bankUpdateSummary)?ACTIVE_DATA.bankUpdateSummary:null;
+  let items=explicit;
+  if(!items){
+    items=(ACTIVE_DATA?.manifest||[]).map(m=>{
+      const bankCount=Number(m.question_count ?? ACTIVE_DATA?.banks?.[m.id]?.questions?.length ?? 0);
+      const dup=Number(m.duplicate_questions_skipped||0);
+      return {bankId:m.id,bankName:m.name||ACTIVE_DATA?.banks?.[m.id]?.meta?.name||m.id,sourceCount:bankCount+dup,bankCount,excludedCount:dup,excludedDuplicateCount:dup};
+    });
+  }
+  if(!items?.length)return "";
+  const rows=items.map((x,i)=>{
+    const name=x.bankName||x.name||x.bankId||`Nhánh ${i+1}`;
+    const bankCount=Number(x.bankCount ?? x.questionCount ?? 0);
+    const sourceCount=Number(x.sourceCount ?? bankCount);
+    const dup=Number(x.excludedDuplicateCount ?? x.duplicateCount ?? 0);
+    const excluded=Number(x.excludedCount ?? Math.max(0,sourceCount-bankCount));
+    let note=String(x.displayNote||x.note||"").trim();
+    if(!note && dup>0)note=`${String(dup).padStart(2,"0")} câu trùng đã được loại khi Build.`;
+    else if(!note && excluded>0)note=`${String(excluded).padStart(2,"0")} câu không đưa vào Bank sau khi Build.`;
+    return `<div class="list-line bank-summary-line"><span><b>${i+1}. ${esc(name)}:</b> ${bankCount}/${sourceCount} câu${note?`<br><span class="small">${esc(note)}</span>`:""}</span></div>`;
+  }).join("");
+  return `<section class="panel bank-update-summary"><div class="eyebrow">THÔNG TIN NGÂN HÀNG CÂU HỎI HIỆN TẠI</div><div class="small mt8">Phiên bản Bank ${esc(ACTIVE_RELEASE?.bankVersion||"")} · ${Number(ACTIVE_RELEASE?.questionCount||0)} câu · cập nhật ${formatDate(ACTIVE_RELEASE?.publishedAt)}</div><div class="list-lines mt12">${rows}</div></section>`;
+}
+
 async function renderUpdate(){
+  rememberView("update");
   CURRENT_DATA=ACTIVE_DATA;pendingUpdate=null;
   app().innerHTML=`<section class="panel"><div class="row"><button class="btn3d" id="backHome">‹</button><div><div class="eyebrow">NGÂN HÀNG CÂU HỎI</div><div class="title mt8">Cập nhật dữ liệu</div></div></div></section>
   <section class="panel"><div class="eyebrow">PHIÊN BẢN ĐANG DÙNG</div><div class="row between mt8"><div><div class="title">Bank ${esc(ACTIVE_RELEASE.bankVersion)}</div><div class="small mt8">${ACTIVE_RELEASE.questionCount} câu · ${formatDate(ACTIVE_RELEASE.publishedAt)}</div></div><span class="badge primary">Đang hoạt động</span></div></section>
   <section class="panel" id="updateStatus"><div class="center"><div class="small">Bấm để kiểm tra phiên bản mới khi có Internet.</div><button class="btn3d primary mt12" id="checkUpdate">Kiểm tra cập nhật</button></div></section>
-  <div class="center tiny">Chỉ cần Internet khi kiểm tra/tải Bank mới. Sau đó tiếp tục dùng offline.</div>`;
+  <div class="center tiny">Chỉ cần Internet khi kiểm tra/tải Bank mới. Sau đó tiếp tục dùng offline.</div>
+  ${bankUpdateSummaryHtml()}`;
   $("#backHome").onclick=renderHome;$("#checkUpdate").onclick=checkForUpdate;
 }
 async function checkForUpdate(){
   const box=$("#updateStatus");box.innerHTML=`<div class="center"><b>Đang kiểm tra…</b></div>`;
   try{
     const latest=await fetchJson(`${LATEST_URL}?t=${Date.now()}`,{cache:"no-store"});
-    if(latest.bankVersion===ACTIVE_RELEASE.bankVersion){box.innerHTML=`<div class="notice info"><b>Ngân hàng đang là phiên bản mới nhất.</b><div class="mt8">Bank ${esc(latest.bankVersion)} · ${latest.questionCount} câu.</div></div><button class="btn3d mt12" id="checkAgain">Kiểm tra lại</button>`;$("#checkAgain").onclick=checkForUpdate;return;}
+    if(sameBankRelease(latest,ACTIVE_RELEASE)){box.innerHTML=`<div class="notice info"><b>Ngân hàng đang là phiên bản mới nhất.</b><div class="mt8">Bank ${esc(latest.bankVersion)} · ${latest.questionCount} câu.</div></div><button class="btn3d mt12" id="checkAgain">Kiểm tra lại</button>`;$("#checkAgain").onclick=checkForUpdate;return;}
     pendingUpdate=latest;
     box.innerHTML=`<div class="panel accent"><div class="row between"><div><div class="eyebrow">CÓ BẢN MỚI</div><div class="title mt8">Bank ${esc(latest.bankVersion)}</div><div class="small mt8">Phát hành ${formatDate(latest.publishedAt)}</div></div><span class="badge new">MỚI</span></div>
     <div class="grid3 mt16"><div class="metric"><strong>${latest.newCount}</strong><span>Câu mới</span></div><div class="metric"><strong>${latest.updatedCount}</strong><span>Câu cập nhật</span></div><div class="metric"><strong>${latest.questionCount}</strong><span>Tổng câu</span></div></div>
@@ -1446,6 +1518,7 @@ async function downloadUpdate(){
     box.innerHTML=`<div class="notice info"><b>✅ Cập nhật thành công Bank ${esc(ACTIVE_RELEASE.bankVersion)}</b><div class="mt8">${ACTIVE_RELEASE.newCount} câu mới · ${ACTIVE_RELEASE.updatedCount} câu cập nhật · ${ACTIVE_RELEASE.questionCount} câu tổng.</div></div>
     ${newByBank.length?`<div class="panel mt12"><div class="section-title">Nghiệp vụ có câu mới</div><div class="list-lines">${newByBank.map(b=>`<div class="list-line"><span>${esc(b.meta.name)}</span><b>${b.meta.newCount}</b></div>`).join("")}</div></div><button class="btn3d primary" style="width:100%" id="goNewAfterUpdate">🆕 Luyện câu mới</button>`:""}
     <button class="btn3d mt12" style="width:100%" id="homeAfterUpdate">Về màn hình chính</button>`;
+    const summary=document.querySelector(".bank-update-summary");if(summary)summary.outerHTML=bankUpdateSummaryHtml();
     if($("#goNewAfterUpdate"))$("#goNewAfterUpdate").onclick=()=>renderPracticeSetup(true);$("#homeAfterUpdate").onclick=renderHome;
   }catch(e){box.innerHTML=`<div class="notice error"><b>❌ Cập nhật không thành công.</b><div class="mt8">${esc(e.message)} Bank cũ vẫn được giữ nguyên.</div></div><button class="btn3d mt12" id="retryDownload">Thử lại</button>`;$("#retryDownload").onclick=downloadUpdate;}
 }
@@ -1476,10 +1549,10 @@ function resumeFromIOSLifecycle(){
   setTimeout(syncIOSViewport,180);
 }
 document.addEventListener("visibilitychange",()=>{
-  if(document.visibilityState==="hidden") persistActiveSessionForLifecycle();
+  if(document.visibilityState==="hidden"){ updateRememberedScroll(); persistActiveSessionForLifecycle(); }
   else resumeFromIOSLifecycle();
 });
-window.addEventListener("pagehide",persistActiveSessionForLifecycle);
+window.addEventListener("pagehide",()=>{updateRememberedScroll();persistActiveSessionForLifecycle();});
 window.addEventListener("pageshow",resumeFromIOSLifecycle);
 window.addEventListener("orientationchange",()=>setTimeout(syncIOSViewport,120));
 window.addEventListener("resize",syncIOSViewport,{passive:true});
@@ -1564,6 +1637,7 @@ prepareHistoryBase();armHistoryGuard();
 window.addEventListener("beforeinstallprompt",e=>{e.preventDefault();deferredInstallPrompt=e;const b=$("#installBtn");if(b)b.classList.remove("hidden");});
 let swRegistration=null;
 function persistBeforeShellReload(){
+  updateRememberedScroll();
   try{ if(currentSession) persistActiveSessionForLifecycle(); }catch(e){ console.warn("Không thể lưu phiên trước khi cập nhật shell:",e); }
 }
 async function verifyFreshShell(){
@@ -1601,6 +1675,35 @@ async function registerSW(){
     document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible"){reg.update().catch(()=>{});verifyFreshShell();}});
   }catch(e){console.warn("Service worker:",e);}
 }
+async function restoreViewAfterReload(){
+  const state=rememberedView();
+  if(!state||!state.name||state.name==="home")return false;
+  const p=state.params||{};
+  try{
+    switch(state.name){
+      case "about": renderAbout(); break;
+      case "update": await renderUpdate(); break;
+      case "practiceSetup": renderPracticeSetup(!!p.newOnly,p.selectedGroup||"specialist"); break;
+      case "practiceMode":
+        if(p.bankId && ACTIVE_DATA?.banks?.[p.bankId])renderPracticeMode(p.bankId,!!p.newOnly);else return false;
+        break;
+      case "examSetup": renderExamSetup(p.selectedGroup||"specialist",p.groupCode||"A",p.bankId||null); break;
+      case "examHistory": renderExamHistory(); break;
+      case "campaignHome":
+      case "campaignPracticeMode": {
+        const entry=CAMPAIGN_CATALOG.find(x=>x.moduleId===p.moduleId);
+        if(!entry||campaignStatus(entry)!=="ACTIVE")return false;
+        const campaign=await loadCampaign(entry);ACTIVE_CAMPAIGN=campaign;
+        if(state.name==="campaignPracticeMode")renderCampaignPracticeMode(campaign);else renderCampaignHome(campaign);
+        break;
+      }
+      default:return false;
+    }
+    restoreRememberedScroll(state);
+    return true;
+  }catch(e){console.warn("Không thể khôi phục màn hình trước reload:",e);return false;}
+}
+
 function migrateLegacyStorage(){
   try{
     for(const legacyPrefix of LEGACY_STORAGE_PREFIXES){
@@ -1636,6 +1739,8 @@ async function boot(){
       try{await activateSession(session);return;}catch(e){console.warn("Không thể tự khôi phục phiên sau reload:",e);clearActiveSessionPointer();}
     }else clearActiveSessionPointer();
   }
+  if(await restoreViewAfterReload()){setTimeout(()=>checkBankUpdateReminder(),350);return;}
   renderHome();
+  setTimeout(()=>checkBankUpdateReminder(),350);
 }
 boot().catch(e=>{app().innerHTML=`<section class="notice error"><b>Không nạp được ứng dụng.</b><div class="mt8">${esc(e.message)}</div><div class="mt8">Hãy mở qua HTTPS hoặc localhost.</div></section>`;});
