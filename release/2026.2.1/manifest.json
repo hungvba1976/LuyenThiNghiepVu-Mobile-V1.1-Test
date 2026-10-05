@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 2,
+  "productId": "luyen_thi_nghiep_vu",
+  "productName": "Luyện thi nghiệp vụ",
+  "builderVersion": "bank-campaign-builder-1.5.2-stable-final",
+  "bankVersion": "2026.2.1",
+  "publishedAt": "2026-10-05T17:34:03+07:00",
+  "releaseNote": "",
+  "questionCount": 4280,
+  "newCount": 2354,
+  "updatedCount": 1734,
+  "checksumSha256": "69cd8d017e0da4caca2cfed9603430d5e480fdbbae72296f7edaa5a0c40fd67e",
+  "banksUrl": "./release/2026.2.1/banks.json"
+}
